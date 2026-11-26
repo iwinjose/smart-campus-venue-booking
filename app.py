@@ -1,4 +1,5 @@
-from datetime import datetime, time, timedelta
+import calendar
+from datetime import date, datetime, time, timedelta
 import html
 
 import pandas as pd
@@ -12,6 +13,7 @@ from database import (
     check_conflicts_and_stock,
     fetch_dataframe,
     get_equipment_stock,
+    get_monthly_booking_counts,
     get_slot_availability,
     init_db,
     now_ist,
@@ -50,6 +52,10 @@ init_db()
 
 if "selected_date" not in st.session_state:
     st.session_state["selected_date"] = now_ist().date()
+if "cal_year" not in st.session_state:
+    st.session_state["cal_year"] = st.session_state["selected_date"].year
+if "cal_month" not in st.session_state:
+    st.session_state["cal_month"] = st.session_state["selected_date"].month
 
 # ---------------------------------------------------------------------------
 # Clean, Breathable Modern CSS
@@ -359,6 +365,106 @@ st.markdown(
         color: {PRIMARY} !important;
         background-color: {PRIMARY_SOFT} !important;
     }}
+
+    /* Interactive Highlighted Calendar Popover */
+    [data-testid="stPopoverBody"] {{
+        min-width: 340px !important;
+        padding: 0.9rem 1rem !important;
+        border-radius: 14px !important;
+    }}
+    .vp-cal-month-title {{
+        text-align: center;
+        font-size: 0.96rem;
+        font-weight: 700;
+        color: {TEXT_MAIN};
+        padding-top: 0.35rem;
+    }}
+    .vp-cal-weekdays {{
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        text-align: center;
+        font-size: 0.74rem;
+        font-weight: 600;
+        color: {TEXT_SUB};
+        margin: 0.4rem 0 0.25rem 0;
+    }}
+    .vp-cal-legend {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.6rem;
+        padding-top: 0.55rem;
+        border-top: 1px solid #F1F5F9;
+        font-size: 0.74rem;
+        color: {TEXT_SUB};
+    }}
+    .vp-leg-item {{
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }}
+    .vp-leg-swatch {{
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+        display: inline-block;
+    }}
+    [class*="st-key-cal_open_"] button,
+    [class*="st-key-cal_booked_"] button,
+    [class*="st-key-cal_pending_"] button,
+    [class*="st-key-cal_sel_"] button {{
+        padding: 0.2rem 0 !important;
+        min-height: 2.25rem !important;
+        font-size: 0.82rem !important;
+        border-radius: 8px !important;
+        position: relative !important;
+    }}
+    [class*="st-key-cal_open_"] button {{
+        background-color: #FFFFFF !important;
+        border: 1px solid #F1F5F9 !important;
+        color: #475569 !important;
+        font-weight: 500 !important;
+    }}
+    [class*="st-key-cal_open_"] button:hover {{
+        border-color: #CBD5E1 !important;
+        background-color: #F8FAFC !important;
+    }}
+    [class*="st-key-cal_booked_"] button {{
+        background-color: #DCFCE7 !important;
+        border: 1.5px solid #10B981 !important;
+        color: #065F46 !important;
+        font-weight: 700 !important;
+    }}
+    [class*="st-key-cal_booked_"] button::after {{
+        content: "";
+        position: absolute;
+        bottom: 3px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background-color: #059669;
+    }}
+    [class*="st-key-cal_pending_"] button {{
+        background-color: #ECFDF5 !important;
+        border: 1.5px solid #F59E0B !important;
+        color: #065F46 !important;
+        font-weight: 700 !important;
+    }}
+    [class*="st-key-cal_pending_"] button::after {{
+        content: "";
+        position: absolute;
+        bottom: 3px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background-color: #F59E0B;
+    }}
 </style>
 """,
     unsafe_allow_html=True,
@@ -480,9 +586,20 @@ def open_booking_dialog(
 
 
 # ---------------------------------------------------------------------------
-# Simple, Uncluttered Top Header
+# Simple, Uncluttered Top Header with Highlighted Booking Calendar
 # ---------------------------------------------------------------------------
-h_left, h_date, h_cta = st.columns([3.4, 1.3, 1.2], vertical_alignment="center", gap="medium")
+selected_date_val = st.session_state["selected_date"]
+date_str = selected_date_val.strftime("%Y-%m-%d")
+
+sel_month_counts = get_monthly_booking_counts(selected_date_val.year, selected_date_val.month)
+sel_day_total = sel_month_counts.get(date_str, {}).get("total", 0)
+cal_btn_label = (
+    f"📅 {selected_date_val.strftime('%d %b %Y')} · {sel_day_total} booked"
+    if sel_day_total > 0
+    else f"📅 {selected_date_val.strftime('%d %b %Y')} · Open"
+)
+
+h_left, h_date, h_cta = st.columns([3.0, 1.75, 1.2], vertical_alignment="center", gap="medium")
 with h_left:
     st.markdown(
         """
@@ -497,19 +614,107 @@ with h_left:
         unsafe_allow_html=True,
     )
 with h_date:
-    picked_date = st.date_input(
-        "Date",
-        value=st.session_state["selected_date"],
-        label_visibility="collapsed",
-    )
-    if picked_date != st.session_state["selected_date"]:
-        st.session_state["selected_date"] = picked_date
-        st.rerun()
+    with st.popover(cal_btn_label, width="stretch"):
+        cy = st.session_state["cal_year"]
+        cm = st.session_state["cal_month"]
+
+        nav_prev, nav_lbl, nav_next, nav_today = st.columns([0.75, 2.4, 0.75, 1.15], gap="small")
+        with nav_prev:
+            if st.button("◀", key="cal_prev_m", width="stretch"):
+                if cm == 1:
+                    st.session_state["cal_year"] = cy - 1
+                    st.session_state["cal_month"] = 12
+                else:
+                    st.session_state["cal_month"] = cm - 1
+                st.rerun()
+        with nav_lbl:
+            st.markdown(
+                f'<div class="vp-cal-month-title">{calendar.month_name[cm]} {cy}</div>',
+                unsafe_allow_html=True,
+            )
+        with nav_next:
+            if st.button("▶", key="cal_next_m", width="stretch"):
+                if cm == 12:
+                    st.session_state["cal_year"] = cy + 1
+                    st.session_state["cal_month"] = 1
+                else:
+                    st.session_state["cal_month"] = cm + 1
+                st.rerun()
+        with nav_today:
+            if st.button("Today", key="cal_go_today", width="stretch"):
+                today_d = now_ist().date()
+                st.session_state["selected_date"] = today_d
+                st.session_state["cal_year"] = today_d.year
+                st.session_state["cal_month"] = today_d.month
+                st.rerun()
+
+        st.markdown(
+            '<div class="vp-cal-weekdays">'
+            "<span>Mo</span><span>Tu</span><span>We</span><span>Th</span>"
+            "<span>Fr</span><span>Sa</span><span>Su</span></div>",
+            unsafe_allow_html=True,
+        )
+
+        month_counts = get_monthly_booking_counts(cy, cm)
+        month_matrix = calendar.monthcalendar(cy, cm)
+
+        for week in month_matrix:
+            w_cols = st.columns(7, gap="small")
+            for idx_d, day_num in enumerate(week):
+                with w_cols[idx_d]:
+                    if day_num == 0:
+                        st.markdown("<div style='height:2.25rem;'></div>", unsafe_allow_html=True)
+                    else:
+                        d_obj = date(cy, cm, day_num)
+                        d_iso = d_obj.strftime("%Y-%m-%d")
+                        info = month_counts.get(d_iso)
+                        is_sel = d_obj == selected_date_val
+
+                        if info:
+                            tip = f"{d_obj.strftime('%d %b %Y')}: {info['total']} booking(s)"
+                            if info["pending"] > 0:
+                                tip += f" ({info['pending']} pending approval)"
+                        else:
+                            tip = f"{d_obj.strftime('%d %b %Y')}: No bookings"
+
+                        if is_sel:
+                            btn_key = f"cal_sel_{d_iso}"
+                            btn_type = "primary"
+                        elif info and info["pending"] > 0:
+                            btn_key = f"cal_pending_{d_iso}"
+                            btn_type = "secondary"
+                        elif info:
+                            btn_key = f"cal_booked_{d_iso}"
+                            btn_type = "secondary"
+                        else:
+                            btn_key = f"cal_open_{d_iso}"
+                            btn_type = "secondary"
+
+                        if st.button(
+                            str(day_num),
+                            key=btn_key,
+                            type=btn_type,
+                            help=tip,
+                            width="stretch",
+                        ):
+                            st.session_state["selected_date"] = d_obj
+                            st.rerun()
+
+        st.markdown(
+            f"""
+            <div class="vp-cal-legend">
+                <span class="vp-leg-item"><span class="vp-leg-swatch" style="background:#059669;"></span>Selected</span>
+                <span class="vp-leg-item"><span class="vp-leg-swatch" style="background:#DCFCE7; border:1.5px solid #10B981;"></span>Booked</span>
+                <span class="vp-leg-item"><span class="vp-leg-swatch" style="background:#ECFDF5; border:1.5px solid #F59E0B;"></span>Pending</span>
+                <span><b>{len(month_counts)}</b> day(s) booked</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
 with h_cta:
     if st.button("➕ Book a Venue", type="primary", width="stretch"):
         open_booking_dialog(st.session_state["selected_date"])
-
-date_str = st.session_state["selected_date"].strftime("%Y-%m-%d")
 
 st.write("")
 

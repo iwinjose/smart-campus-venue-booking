@@ -60,6 +60,9 @@ def _safe_live_window(now: datetime) -> tuple[str, str]:
 def _seed_sample_bookings(cur: sqlite3.Cursor) -> None:
     now = now_ist()
     today_str = now.strftime("%Y-%m-%d")
+    tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    plus3_str = (now + timedelta(days=3)).strftime("%Y-%m-%d")
+    plus5_str = (now + timedelta(days=5)).strftime("%Y-%m-%d")
     created_ts = now.strftime("%Y-%m-%d %H:%M:%S")
     live_start, live_end = _safe_live_window(now)
 
@@ -132,6 +135,48 @@ def _seed_sample_bookings(cur: sqlite3.Cursor) -> None:
             3,
             1,
             "Pending",
+            created_ts,
+        ),
+        (
+            "MCA AI & Cloud Mini-Symposium",
+            "Dept. of Computer Science",
+            "Faculty Coordinator",
+            "Skyview",
+            tomorrow_str,
+            "10:00",
+            "13:00",
+            3,
+            4,
+            1,
+            "Approved",
+            created_ts,
+        ),
+        (
+            "SWO Inter-Department Debate Prelims",
+            "SWO (Student Welfare Office)",
+            "SWO Cultural Team",
+            "Room 105",
+            plus3_str,
+            "14:00",
+            "16:30",
+            1,
+            3,
+            1,
+            "Pending",
+            created_ts,
+        ),
+        (
+            "GATEWAYS 2026 Inauguration Rehearsal",
+            "Dept. of Computer Science",
+            "Iwin Jose (2647126)",
+            "Main Auditorium",
+            plus5_str,
+            "11:00",
+            "14:00",
+            4,
+            6,
+            2,
+            "Approved",
             created_ts,
         ),
     ]
@@ -424,6 +469,34 @@ def simulate_incoming_request(target_date: str) -> tuple[bool, str]:
             return True, f"Simulated Request #{booking_id}: '{title}' for {venue} ({s_time}–{e_time})."
 
     return False, "All campus venues are fully booked across standard slots for this date."
+
+
+def get_monthly_booking_counts(year: int, month: int) -> dict[str, dict[str, int]]:
+    """Return per-date booking summary {'total', 'pending', 'confirmed'} for a given YYYY-MM."""
+    prefix = f"{year:04d}-{month:02d}-%"
+    conn = get_connection()
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT booking_date,
+               COUNT(*) AS total,
+               SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending,
+               SUM(CASE WHEN status IN ('Approved', 'Dispatched', 'Returned') THEN 1 ELSE 0 END) AS confirmed
+        FROM bookings
+        WHERE booking_date LIKE ? AND status != 'Rejected'
+        GROUP BY booking_date
+        """,
+        (prefix,),
+    ).fetchall()
+    conn.close()
+    return {
+        r["booking_date"]: {
+            "total": int(r["total"]),
+            "pending": int(r["pending"] or 0),
+            "confirmed": int(r["confirmed"] or 0),
+        }
+        for r in rows
+    }
 
 
 def fetch_dataframe(query: str, params: tuple = ()) -> pd.DataFrame:
